@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>Quranify Mini</title>
+<style>
+:root { --text: #f5f5f7; --muted: #9a9aa0; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; user-select: none; }
+body {
+  background: linear-gradient(135deg, #1d1d21, #121214);
+  color: var(--text); font: 14px/1.35 "Segoe UI", Tahoma, sans-serif;
+  border: 1px solid rgba(255,255,255,.09);
+  display: flex; flex-direction: column;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+svg { display: block; }
+.top { flex: 1; display: flex; align-items: center; gap: 12px; padding: 0 12px 0 10px; min-height: 0; }
+.art { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; font-size: 22px; font-weight: 700; flex: none; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+.t { flex: 1; min-width: 0; }
+.t1 { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2 { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctl { display: flex; align-items: center; gap: 6px; flex: none; }
+.ctl button { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: #d8d8dc; }
+.ctl button:hover { background: rgba(255,255,255,.08); color: #fff; }
+.ctl .pp { width: 40px; height: 40px; background: #fff; color: #000; }
+.ctl .pp:hover { background: #e8e8eb; color: #000; }
+.win { display: flex; flex-direction: column; gap: 2px; flex: none; margin-inline-start: 2px; }
+.win button { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; color: var(--muted); }
+.win button:hover { background: rgba(255,255,255,.1); color: #fff; }
+.bar { height: 14px; display: flex; align-items: center; padding: 0 12px 6px; cursor: pointer; direction: ltr; }
+.bar div { flex: 1; height: 3px; border-radius: 3px; background: rgba(255,255,255,.14); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: #fff; }
+.bar:hover div { height: 5px; }
+.empty .ctl, .empty .bar { opacity: .35; pointer-events: none; }
+</style>
+</head>
+<body class="empty">
+  <div class="top" id="drag">
+    <div class="art" id="art">♪</div>
+    <div class="t"><div class="t1" id="title">مفيش حاجة شغّالة</div><div class="t2" id="sub">شغّل سورة من البرنامج</div></div>
+    <div class="ctl">
+      <button id="prev" title="السابقة"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 6.2v11.6a.8.8 0 0 0 1.25.66L12 13v4.8a.8.8 0 0 0 1.25.66l8.4-5.8a.8.8 0 0 0 0-1.32l-8.4-5.8A.8.8 0 0 0 12 6.2V11L4.25 5.54A.8.8 0 0 0 3 6.2Z"/></svg></button>
+      <button id="pp" class="pp" title="تشغيل / إيقاف"></button>
+      <button id="next" title="التالية"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="transform:scaleX(-1)"><path d="M3 6.2v11.6a.8.8 0 0 0 1.25.66L12 13v4.8a.8.8 0 0 0 1.25.66l8.4-5.8a.8.8 0 0 0 0-1.32l-8.4-5.8A.8.8 0 0 0 12 6.2V11L4.25 5.54A.8.8 0 0 0 3 6.2Z"/></svg></button>
+    </div>
+    <div class="win">
+      <button id="close" title="قفل المشغّل الصغير (Ctrl+Alt+M)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      <button id="open" title="فتح البرنامج"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-8 8M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></svg></button>
+    </div>
+  </div>
+  <div class="bar" id="bar" title="اضغط للتقديم"><div><i id="fill"></i></div></div>
+<script>
+const $ = id => document.getElementById(id);
+const post = m => window.ipc.postMessage(JSON.stringify(m));
+const PLAY = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z"/></svg>';
+const PAUSE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="4" width="4.5" height="16" rx="1.2"/><rect x="14" y="4" width="4.5" height="16" rx="1.2"/></svg>';
+let st = { playing: false, pos: 0, dur: 0 }, base = 0, timer;
+function hue(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; }
+function draw() {
+  const pos = st.playing ? st.pos + (Date.now() - base) / 1000 : st.pos;
+  $('fill').style.width = st.dur ? Math.min(100, pos / st.dur * 100) + '%' : '0';
+}
+window.__m = s => {
+  if (!s) return;
+  st = s; base = Date.now();
+  const has = !!s.title;
+  document.body.classList.toggle('empty', !has);
+  $('title').textContent = has ? (/[A-Za-z]/.test(s.title) ? s.title : 'سورة ' + s.title) : 'مفيش حاجة شغّالة';
+  $('sub').textContent = has ? s.sub : 'شغّل سورة من البرنامج';
+  const name = (s.initial || s.sub || '').trim().replace(/^(ال)/, '');
+  const h = hue(s.initial || s.sub || '');
+  $('art').textContent = has ? (name.charAt(0) || '♪') : '♪';
+  $('art').style.background = has ? `linear-gradient(145deg,hsl(${h} 45% 34%),hsl(${(h + 40) % 360} 55% 16%))` : 'rgba(255,255,255,.06)';
+  $('pp').innerHTML = s.playing ? PAUSE : PLAY;
+  clearInterval(timer); draw();
+  // Smooth progress between updates, only while playing.
+  if (s.playing && s.dur) timer = setInterval(draw, 500);
+};
+$('pp').innerHTML = PLAY;
+$('pp').onclick = () => post({ cmd: 'ctl', action: 'toggle' });
+$('next').onclick = () => post({ cmd: 'ctl', action: 'next' });
+$('prev').onclick = () => post({ cmd: 'ctl', action: 'prev' });
+$('open').onclick = () => post({ cmd: 'show' });
+$('close').onclick = () => post({ cmd: 'close' });
+$('bar').onclick = e => {
+  if (!st.dur) return;
+  const r = $('bar').firstElementChild.getBoundingClientRect();
+  const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  post({ cmd: 'ctl', action: 'seek:' + Math.floor(f * st.dur) });
+};
+// Drag the window from anywhere that is not a button.
+$('drag').addEventListener('mousedown', e => { if (e.button === 0 && !e.target.closest('button')) post({ cmd: 'drag' }); });
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); post({ cmd: 'ctl', action: 'toggle' }); }
+  if (e.code === 'Escape') post({ cmd: 'close' });
+});
+post({ cmd: 'ready' });
+</script>
+</body>
+</html>
