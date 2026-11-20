@@ -83,7 +83,106 @@
     };
     var json = JSON.stringify(st);
     if (json !== lastState) { lastState = json; post2({ cmd: 'state', data: st }); }
+    if (playing && tick % 5 === 0) saveResume(m);
   }, 1000);
+
+  // ── Resume where you stopped ──
+  // The site itself always opens on Al-Fatihah from the start. Remember the surah, reciter and
+  // position here, and on the next start load that surah again, paused at the same minute.
+  var RESUME = '__qd_resume', restoring = false;
+  var nativePlay = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    // The surah page starts playing by itself; keep it silent while we restore.
+    if (restoring) this.muted = true;
+    return nativePlay.apply(this, arguments);
+  };
+  function barInfo() {
+    var bar = document.querySelector('[aria-label="Open full player"]');
+    if (!bar) return null;
+    var img = bar.querySelector('img'), src = '';
+    try { src = decodeURIComponent(img ? (img.currentSrc || img.src || '') : ''); } catch (_) {}
+    var id = src.match(/\/reciters\/(\d+)\//);
+    var lines = bar.innerText.split(/\n/).map(function (x) { return x.trim(); }).filter(Boolean);
+    return { title: lines[0] || '', name: lines[1] || '', rid: id ? id[1] : null };
+  }
+  // Also save the moment you pause, so quitting right after a pause keeps the exact spot.
+  document.addEventListener('pause', function (e) { if (e.target && e.target.tagName === 'AUDIO') saveResume(e.target); }, true);
+  function saveResume(m) {
+    if (restoring) return;
+    var b = barInfo();
+    if (!b || !b.rid || !b.title || !isFinite(m.duration)) return;
+    try {
+      if (m.duration - m.currentTime < 15) { localStorage.removeItem(RESUME); return; }
+      var lang = (location.pathname.match(/^\/([a-z]{2})(\/|$)/) || [0, 'en'])[1];
+      localStorage.setItem(RESUME, JSON.stringify({ rid: b.rid, name: b.name, title: b.title, pos: Math.floor(m.currentTime), lang: lang, ts: Date.now() }));
+    } catch (_) {}
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  async function waitFor(fn, ms) {
+    for (var t = 0; t < ms; t += 250) { var v = fn(); if (v) return v; await sleep(250); }
+    return null;
+  }
+  function fmt(s) { s = Math.floor(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+  function note(text) {
+    var n = document.createElement('div');
+    n.textContent = text;
+    n.setAttribute('dir', 'rtl');
+    n.setAttribute('style', 'position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483000;background:#fff;color:#000;padding:9px 18px;border-radius:999px;font:600 14px "Segoe UI",Tahoma,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.4);transition:opacity .3s');
+    document.body.appendChild(n);
+    setTimeout(function () { n.style.opacity = '0'; setTimeout(function () { n.remove(); }, 400); }, 4500);
+  }
+  async function restoreResume() {
+    try { if (sessionStorage.getItem('__qd_restored')) return; sessionStorage.setItem('__qd_restored', '1'); } catch (_) { return; }
+    var s = null;
+    try { s = JSON.parse(localStorage.getItem(RESUME) || 'null'); } catch (_) {}
+    if (!s || !s.rid || !s.pos || Date.now() - s.ts > 30 * 864e5) return;
+    if (!(await waitFor(function () { return window.next && window.next.router && document.querySelector('[aria-label="Open full player"]'); }, 15000))) return;
+    await sleep(1200);
+    var m = media(), b = barInfo();
+    if (m && !m.paused) return; // you already started something yourself
+    if (b && b.title === s.title && b.name === s.name && m && m.currentTime > 5) return;
+    var rpath = await reciterPath(s.lang, s.rid, s.name);
+    if (!/\/reciters\/[a-z]/.test(rpath)) return;
+    var link = null;
+    try {
+      var doc = new DOMParser().parseFromString(await (await fetch(rpath, { credentials: 'same-origin' })).text(), 'text/html');
+      // Surah pages end with the surah's name, e.g. ".../al-baqarah" for "Al-Baqarah",
+      // ".../ali-imran" for "Ali 'Imran". Compare letters only.
+      var key = function (x) { return String(x).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, ''); };
+      var want = key(s.title);
+      link = Array.prototype.find.call(doc.querySelectorAll('a[href^="' + rpath + '/"]'), function (a) {
+        return key(a.getAttribute('href').split('/').pop()) === want;
+      });
+    } catch (_) {}
+    if (!link) return;
+    var back = location.pathname + location.search;
+    restoring = true;
+    window.next.router.push(link.getAttribute('href'));
+    var a = await waitFor(function () {
+      var bi = barInfo(), x = media();
+      return bi && bi.title === s.title && x && x.readyState >= 1 && isFinite(x.duration) && x.duration > 0 ? x : null;
+    }, 20000);
+    if (a) {
+      // Pause through the site's own button so its player knows it's paused (pausing the
+      // audio directly made the first press of Play do nothing).
+      await waitFor(function () { return !a.paused || null; }, 3000);
+      var pb = btn(/^Pause$/i);
+      if (pb) pb.click();
+      await waitFor(function () { return a.paused || null; }, 2000);
+      a.pause();
+      a.currentTime = Math.min(s.pos, Math.max(0, a.duration - 10));
+      await sleep(400);
+    }
+    // Never leave it playing out loud by surprise (e.g. right after Windows starts).
+    var cur = media();
+    if (cur && !cur.paused) { var pb2 = btn(/^Pause$/i); if (pb2) pb2.click(); cur.pause(); }
+    if (cur) cur.muted = false;
+    restoring = false;
+    if (back !== location.pathname + location.search && !/\/reciters\//.test(back)) window.next.router.push(back);
+    if (a) note('رجعت لـ ' + s.title + ' عند ' + fmt(a.currentTime) + '. دوس تشغيل وكمّل.');
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', restoreResume);
+  else restoreResume();
 
   // ── Site bug workaround: reciter links by number (e.g. /en/reciters/92, the reciter's name in
   // the full player) get "Internal Server Error" from quranify.pro's server, in any browser.
